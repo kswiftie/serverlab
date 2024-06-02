@@ -1,5 +1,8 @@
 #include "..\\include\\server.h"
 #include <functional>
+#include "database.cpp"
+
+database musicdb;
 
 Server::Server(std::string server_ip, uint16_t port_value) {
 	//IP in string format to numeric format for socket functions. Data is in "ip_to_num"
@@ -12,7 +15,7 @@ Server::Server(std::string server_ip, uint16_t port_value) {
 	}
     
 	// Server socket initialization
-	this->ServSock = socket(AF_INET, SOCK_STREAM, 0);
+	this->ServSock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 
 	if (this->ServSock == INVALID_SOCKET) {
 		std::cout << "Error initialization socket # " << WSAGetLastError() << "\n";
@@ -20,27 +23,24 @@ Server::Server(std::string server_ip, uint16_t port_value) {
 		WSACleanup();
 		exit(1);
 	}
-	else
-		std::cout << "Server socket initialization is OK\n";
 
 	// Server socket binding
 	sockaddr_in servInfo;
 	ZeroMemory(&servInfo, sizeof(servInfo));	// Initializing servInfo structure
 				
 	servInfo.sin_family = AF_INET;
-	servInfo.sin_addr = ip_to_num;	
+	servInfo.sin_addr.S_un.S_addr = htonl(INADDR_ANY);
+	// servInfo.sin_addr = ip_to_num;
 	servInfo.sin_port = htons(port_value);
 
 	this->erStat = bind(this->ServSock, (sockaddr*)&servInfo, sizeof(servInfo));
 
 	if (this->erStat != 0) {
 		std::cout << "Error Socket binding to server info. Error # " << WSAGetLastError() << "\n";
-		closesocket(this->ServSock);
-		WSACleanup();
+		stop();
 		exit(1);
 	}
-	else 
-		std::cout << "Binding socket to Server info is OK\n";
+	this->status = true;
 }
 
 void Server::stop() {
@@ -55,101 +55,252 @@ Server::~Server() {
 
 void Server::waitingAcceptLoop() {
 	while (this->status) {
-		//Starting to listen to any Clients
 		this->erStat = listen(this->ServSock, SOMAXCONN);
-
 		if (this->erStat != 0) {
 			std::cout << "Can't start to listen to. Error # " << WSAGetLastError() << "\n";
 			stop();
+			continue;
 		}
-		std::cout << "Listening...";
-		
-		std::vector<std::thread> clientThreads;
 
 		sockaddr_in clientInfo;
 		ZeroMemory(&clientInfo, sizeof(clientInfo));
 		int clientInfo_size = sizeof(clientInfo);
 		SOCKET clientSocket = accept(ServSock, (sockaddr*)&clientInfo, &clientInfo_size);
 
-		if (clientSocket < 0) {
+		if (clientSocket == INVALID_SOCKET) {
 			std::cerr << "Accept error" << WSAGetLastError() << "\n";
 			continue;
 		}
-		if (clientThreads.size() < 2)
-			clientThreads.emplace_back(std::bind(&Server::client_handler, this, clientSocket, clientInfo));
-
-		for (auto& thread : clientThreads) {
-			thread.join();
-		}
-		clientThreads.clear();
+		response(clientSocket, clientInfo);
 	}
 }
 
-void Server::client_handler(SOCKET client, sockaddr_in clientInfo) {
-	//Client socket creation and acception in case of connection
-	// sockaddr_in clientInfo;
-	// ZeroMemory(&clientInfo, sizeof(clientInfo)); // Initializing clientInfo structure
+void Server::response(SOCKET client, sockaddr_in clientInfo) {
+	char userip[50];
+	inet_ntop(AF_INET, &clientInfo.sin_addr, userip, INET_ADDRSTRLEN); // Convert connected client's IP to standard string format
+	std::cout << "Client connected with ip " << userip << "\n";
+	char buffer[BUFF_SIZE];
+	int request = recv(client, buffer, BUFF_SIZE, 0);
+	if (request != SOCKET_ERROR) {
+		/*
+		std::string response_header = "\
+HTTP/1.1 200 OK\r\n\
+Content-Type: text/html; charset=UTF-8\r\n\
+Content-Length: 15\r\n\r\n";
+		*/
+		std::string response_header = ""; // remove
 
-	// int clientInfo_size = sizeof(clientInfo);
+		std::string response_content = get_response(buffer, userip);
 
-	// SOCKET client = accept(this->ServSock, (sockaddr*)&clientInfo, &clientInfo_size);
-
-	if (client == INVALID_SOCKET) {
-		std::cout << "Client detected, but can't connect to a client. Error # " << WSAGetLastError() << "\n";
-		closesocket(client);
-		stop();
-		exit(1);
-	}
-	else {
-		std::cout << "Connection to a client established successfully\n";
-		char clientIP[22];
-		inet_ntop(AF_INET, &clientInfo.sin_addr, clientIP, INET_ADDRSTRLEN); // Convert connected client's IP to standard string format
-		std::cout << "Client connected with IP address " << clientIP << "\n";
-	}
-	
-	//Exchange text data between Server and Client. Disconnection if a client send "xxx"
-	std::vector <char> servBuff(BUFF_SIZE);
-	std::vector <char> clientBuff(BUFF_SIZE); // Creation of buffers for sending and receiving data
-	short packet_size = 0; // The size of sending / receiving packet in bytes
-	
-	while (true) {
-		packet_size = recv(client, servBuff.data(), servBuff.size(), 0); // Receiving packet from client. Program is waiting (system pause) until receive
-		std::cout << client << " Client's message: " << servBuff.data() << "\n";
-
-		std::cout << "Your (host) message: ";
-		fgets(clientBuff.data(), clientBuff.size(), stdin);
-
-		// Check whether server would like to stop chatting 
-		if (clientBuff[0] == 'x' && clientBuff[1] == 'x' && clientBuff[2] == 'x') {
-			shutdown(client, SD_BOTH);
-			closesocket(client);
-			break;
-		}
-
-		packet_size = send(client, clientBuff.data(), clientBuff.size(), 0);
-
-		if (packet_size == SOCKET_ERROR) {
-			std::cout << "Can't send message to Client. Error # " << WSAGetLastError() << "\n";
-			closesocket(client);
-			stop();
-			exit(1);
-		}
+		send(client, (response_header + response_content).c_str(), (response_header + response_content).size(), 0);
 	}
 	closesocket(client);
 }
 
+std::string Server::get_response(std::string request, std::string userip) {
+    std::cout << request << "\n";
+	std::string res = "Incorrect request\n";
+    if (request == help) {
+        res =gethelp();
+    }
+    else if (std::regex_match(request, login)) {
+		std::string name, password;
+		int name_id = request.find("username=") + 9, password_id = request.find("password=") + 9;
+		for (int i = name_id; i < password_id - 10; ++i) name += request[i];
+		for (int i = password_id; i < request.size(); ++i) password += request[i];
+        res = login_user(name, password, userip);
+    }
+    else if (request == masklogout) {
+        res = logout(userip);
+    }
+    else if (std::regex_match(request, reg)) {
+        std::string name, password;
+		int name_id = request.find("username=") + 9, password_id = request.find("password=") + 9;
+		for (int i = name_id; i < password_id - 10; ++i) name += request[i];
+		for (int i = password_id; i < request.size(); ++i) password += request[i];
+        res = reg_user(name, password, userip);
+    }
+	else if (std::regex_match(request, listen_song_by_info)) {
+		auto it = this->loggedin_users.find(userip);
+		if (it != this->loggedin_users.end()) {
+			int song_id = request.find("song=") + 5,
+			album_id = request.find("&album=") + 7,
+			artist_id = request.find("&artist=") + 8;
+			std::string song = "", album = "", artist = "";
+			for (int i = song_id; i < album_id - 7; ++i)
+				song += request[i];
+			for (int i = album_id; i < artist_id - 8; ++i)
+				album += request[i];
+			for (int i = artist_id; i < request.size(); ++i)
+				artist += request[i];
+        	res = listen_song(song, album, artist, userip);
+		}
+		else
+			res = "You have to login before\n";
+        
+	}
+    else if (request == "GET /HTTP/127.0.0.1:8080") {
+        res = "Incorrect request. Enter help for more information\n";
+    }
+    return res;
+}
+
+std::string Server::reg_user(std::string name, std::string password, std::string userip) {
+	std::string columns = "(name, password)";
+	musicdb.get_info_from_table("client", columns);
+	std::ifstream file("tmp.txt");
+	if (file.is_open()) {
+        std::string line;
+        while (std::getline(file, line)) {
+			if (line.find(name) != std::string::npos) {
+				file.close();
+				return "User with that name has already been registered. Try a different username\n";
+			}
+        }
+        file.close();
+    }
+	std::hash<std::string> hasher;
+    size_t hashpassword = hasher(password);
+	std::string str_hash_password = std::to_string(hashpassword);
+	name = (std::string)"'" + name + (std::string)"'";
+	password = (std::string)"'" + password + (std::string)"'";
+	std::string res = (std::string)"(" + name + (std::string)", " + str_hash_password + (std::string)")";
+    musicdb.add_entry("client", columns, res);
+	return "You succesful registered\n";
+}
+
+std::string Server::gethelp() {
+	return "list of availavle commands:\n\
+help\n\
+login\n\
+logout\n\
+register\n\
+listen song (enter style: song name, album name, artist name.)\n";
+}
+
+std::string Server::login_user(std::string name, std::string password, std::string userip) {
+	std::hash<std::string> hasher;
+	std::string columns = "(name, ' ', password)";
+    size_t hashpassword = hasher(password);
+	musicdb.get_info_from_table("client", columns);
+	std::string str_hash_password = std::to_string(hashpassword);
+	std::ifstream file("tmp.txt");
+	if (file.is_open()) {
+        std::string line;
+        while (std::getline(file, line)) {
+			if (line.find(name) != std::string::npos && line.find(str_hash_password) != std::string::npos) {
+				this->loggedin_users[userip] = name;
+				file.close();
+				return "You succesful logged in\n";
+			}
+        }
+        file.close();
+    }
+	return "Username or password is incorrect\n";
+}
+
+std::string Server::logout(std::string userip) {
+	auto it = this->loggedin_users.find(userip);
+	if (it != this->loggedin_users.end()) {
+		this->loggedin_users.erase(userip);
+		return "You succesful logged out\n";
+	}
+	return "Youre not logged in\n";
+}
+
+std::string Server::listen_song(std::string song,
+std::string album,
+std::string artist, std::string clientip) {
+	std::string columns = "(id, ' ', name)";
+	musicdb.get_info_from_table("song", columns);
+	std::vector <std::string> songs_id = get_id(song);
+	if (song == "" && album == "" && artist == "")
+		return "Incorrect data";
+	std::string request = "SELECT song.id FROM song \
+INNER JOIN album ON album.id IN (SELECT id FROM album WHERE album.name = '" + album + "') \
+INNER JOIN artist ON artist.id IN  (SELECT id FROM artist WHERE artist.name = '" + artist + "') \
+INNER JOIN album_song ON album_song.album_id = album.id AND album_song.song_id = song.id \
+INNER JOIN artist_song ON artist_song.artist_id = artist.id AND artist_song.song_id = song.id;";
+	musicdb.hard_request(request);
+	std::ifstream file("tmp.txt");
+	std::vector <std::string> res;
+	if (file.is_open()) {
+		std::string line;
+		while (std::getline(file, line)) {
+			for (std::string s : songs_id) {
+				if (line.find(s) != std::string::npos) {
+					update_song_info(s, this->loggedin_users[clientip]);
+					file.close();
+					return "You listened song " + song;
+				}
+			}
+		}
+	}
+	file.close();
+	return "Song was not found\n";
+}
+
+std::vector <std::string> Server::get_id(std::string name) {
+	std::ifstream file("tmp.txt");
+	std::vector <std::string> res;
+	if (file.is_open()) {
+        std::string line;
+        while (std::getline(file, line)) {
+			if (line.find(name) != std::string::npos) {
+				std::istringstream splitline(line);
+				std::string id;
+				splitline >> id;
+				res.push_back(id);
+			}
+        }
+        file.close();
+    }
+	return res;
+}
+
+void Server::update_song_info(std::string song_id, std::string client) {
+	std::string columns = "(id, ' ', name)";
+	musicdb.get_info_from_table("client", columns);
+	std::vector <std::string> tmp = get_id(client);
+	std::string client_id = tmp[0];
+	std::string request = "INSERT INTO song_listenings \
+(song_id, client_id, listenings_count) \
+VALUES (" + song_id + ", " + client_id + ", 1);";
+	
+	columns = "(song_id, ' ', client_id, ' ', listenings_count)";
+	musicdb.get_info_from_table("song_listenings", columns);
+
+	std::ifstream file("tmp.txt");
+	if (file.is_open()) {
+        std::string line;
+		std::cout << line << "\n";
+        while (std::getline(file, line)) {
+			if (line.find(client_id) != std::string::npos) {
+				std::cout << "true\n";
+				request = "UPDATE song_listenings \
+SET listenings_count = listenings_count + 1 \
+WHERE (song_id = " + song_id + ") \
+AND (client_id = " + client_id + ");";
+				break;
+			}
+        }
+    }
+	file.close();
+	musicdb.hard_request(request);
+}
+
 int main() {
-	// запустим wsastartup
+	system("chcp 1251 >NUL 2>&1");
 	WSADATA wsaData;
     int wsastart = WSAStartup(MAKEWORD(2, 2), &wsaData);
-
     if (wsastart != 0) {
         std::cerr << "WSAStartup failed: " << WSAGetLastError() << "\n";
 		WSACleanup();
         return wsastart;
     }
-	std::cout << "WSAStartup was succesful\n";
+	short port = 8080;
+	std::string host = "127.0.0.1", str_port = std::to_string(port);
 
-    Server server("127.0.0.1", 6666);
+	Server server(host, port);
 	server.waitingAcceptLoop();
 }
