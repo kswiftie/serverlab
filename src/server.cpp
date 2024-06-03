@@ -1,5 +1,4 @@
 #include "..\\include\\server.h"
-#include <functional>
 #include "database.cpp"
 
 database musicdb;
@@ -78,7 +77,6 @@ void Server::waitingAcceptLoop() {
 void Server::response(SOCKET client, sockaddr_in clientInfo) {
 	char userip[50];
 	inet_ntop(AF_INET, &clientInfo.sin_addr, userip, INET_ADDRSTRLEN); // Convert connected client's IP to standard string format
-	std::cout << "Client connected with ip " << userip << "\n";
 	char buffer[BUFF_SIZE];
 	int request = recv(client, buffer, BUFF_SIZE, 0);
 	if (request != SOCKET_ERROR) {
@@ -98,7 +96,6 @@ Content-Length: 15\r\n\r\n";
 }
 
 std::string Server::get_response(std::string request, std::string userip) {
-    std::cout << request << "\n";
 	std::string res = "Incorrect request\n";
     if (request == help) {
         res =gethelp();
@@ -139,6 +136,21 @@ std::string Server::get_response(std::string request, std::string userip) {
 			res = "You have to login before\n";
         
 	}
+	else if (std::regex_match(request, listen_album_by_info)) {
+		auto it = this->loggedin_users.find(userip);
+		if (it != this->loggedin_users.end()) {
+			int album_id = request.find("album=") + 6,
+			artist_id = request.find("&artist=") + 8;
+			std::string album = "", artist = "";
+			for (int i = album_id; i < artist_id - 8; ++i)
+				album += request[i];
+			for (int i = artist_id; i < request.size(); ++i)
+				artist += request[i];
+        	res = listen_album(album, artist, userip);
+		}
+		else
+			res = "You have to login before\n";
+	}
     else if (request == "GET /HTTP/127.0.0.1:8080") {
         res = "Incorrect request. Enter help for more information\n";
     }
@@ -175,7 +187,8 @@ help\n\
 login\n\
 logout\n\
 register\n\
-listen song (enter style: song name, album name, artist name.)\n";
+listen song (enter style: song name, album name, artist name.)\n\
+listen album (enter style: album name, artist name.)\n";
 }
 
 std::string Server::login_user(std::string name, std::string password, std::string userip) {
@@ -231,7 +244,7 @@ INNER JOIN artist_song ON artist_song.artist_id = artist.id AND artist_song.song
 				if (line.find(s) != std::string::npos) {
 					update_song_info(s, this->loggedin_users[clientip]);
 					file.close();
-					return "You listened song " + song;
+					return ("You listened song " + song + " by " + artist);
 				}
 			}
 		}
@@ -258,6 +271,22 @@ std::vector <std::string> Server::get_id(std::string name) {
 	return res;
 }
 
+std::string Server::listen_album(std::string album, std::string artist, std::string clientip) {
+	std::string request = "SELECT CONCAT(song.id, ' songname') FROM song \
+INNER JOIN album ON album.id IN (SELECT id FROM album WHERE album.name = '" + album + "') \
+INNER JOIN artist ON artist.id IN (SELECT id FROM artist WHERE artist.name = '" + artist + "') \
+INNER JOIN album_song ON album_song.album_id = album.id AND album_song.song_id = song.id \
+INNER JOIN artist_song ON artist_song.artist_id = artist.id AND artist_song.song_id = song.id;";
+	musicdb.hard_request(request);
+	std::vector <std::string> songs_id = get_id("songname");
+	int n = songs_id.size();
+	if (n == 0) return "Album was not found\n";
+	for (int i = 0; i < n; ++i) {
+		update_song_info(songs_id[i], this->loggedin_users[clientip]);
+	}
+	return ("You listened album " + album + " by " + artist);
+}
+
 void Server::update_song_info(std::string song_id, std::string client) {
 	std::string columns = "(id, ' ', name)";
 	musicdb.get_info_from_table("client", columns);
@@ -267,16 +296,14 @@ void Server::update_song_info(std::string song_id, std::string client) {
 (song_id, client_id, listenings_count) \
 VALUES (" + song_id + ", " + client_id + ", 1);";
 	
-	columns = "(song_id, ' ', client_id, ' ', listenings_count)";
+	columns = "(song_id, ' ', client_id)";
 	musicdb.get_info_from_table("song_listenings", columns);
 
 	std::ifstream file("tmp.txt");
 	if (file.is_open()) {
         std::string line;
-		std::cout << line << "\n";
         while (std::getline(file, line)) {
-			if (line.find(client_id) != std::string::npos) {
-				std::cout << "true\n";
+			if (line.find(song_id) != std::string::npos && line.find(client_id) != std::string::npos) {
 				request = "UPDATE song_listenings \
 SET listenings_count = listenings_count + 1 \
 WHERE (song_id = " + song_id + ") \
@@ -302,5 +329,10 @@ int main() {
 	std::string host = "127.0.0.1", str_port = std::to_string(port);
 
 	Server server(host, port);
-	server.waitingAcceptLoop();
+	short n = std::thread::hardware_concurrency();
+	std::vector <std::thread> threads(n);
+	for (int i = 0; i < n; ++i)
+		threads.emplace_back((std::thread)(&Server::waitingAcceptLoop, server));
+	for (auto& thread : threads)
+		thread.join();
 }

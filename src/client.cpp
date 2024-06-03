@@ -99,7 +99,7 @@ username=" + login + "&password=" + password;
         res = "GET /HTTP/" + host + ":" + port + "/help";
     }
     else if (request == "listen song") {
-        std::cout << "Enter the name of the song: ";
+        std::cout << "Enter the name of the song, album, artist: ";
         std::string inp;
         std::getline(std::cin, inp); tolower_str(inp);
         std::string song = "", album = "", artist = "";
@@ -107,16 +107,24 @@ username=" + login + "&password=" + password;
         splitrequest >> song;
         splitrequest >> album;
         splitrequest >> artist;
-        res = "GET /listensong /HTTP/1.1\n\
+        res = "GET /listen_song /HTTP/1.1\n\
 Host: " + host + (std::string)":" + port + "\n" +
 "song=" + song +
 "&album=" + album +
 "&artist=" + artist;
     }
     else if (request == "listen album") {
-        std::cout << "Enter the name of the album: ";
-        std::getline(std::cin, request); tolower_str(request);
-        res = "GET /HTTP/" + host + port +"/listen_album?song_info=" + request;
+        std::cout << "Enter the name of the album and artist: ";
+        std::string inp;
+        std::getline(std::cin, inp); tolower_str(inp);
+        std::string album = "", artist = "";
+        std::istringstream splitrequest(inp);
+        splitrequest >> album;
+        splitrequest >> artist;
+        res = "GET /listen_album /HTTP/1.1\n\
+Host: " + host + (std::string)":" + port + "\n" +
+"album=" + album +
+"&artist=" + artist;
     }
     return res;
 }

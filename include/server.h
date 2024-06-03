@@ -17,13 +17,20 @@
 #include <fstream>
 #include <cstdlib>
 #include <sstream>
+#include <functional>
+#include <thread>
 
 const short BUFF_SIZE = 4096;
 std::regex listen_song_by_id("GET /HTTP/127.0.0.1:8080/listen_song\\?song_id=\\d+$");
+std::regex listen_album_by_id("GET /HTTP/127.0.0.1:8080/listen_album\\?album_id=\\d+$");
 std::regex listen_song_by_info("\
-GET /listensong /HTTP/1.1\n\
+GET /listen_song /HTTP/1.1\n\
 Host: 127.0.0.1:8080\n\
 song=([!-~]+)&album=([!-~]+)&artist=([!-~]+)");
+std::regex listen_album_by_info("\
+GET /listen_album /HTTP/1.1\n\
+Host: 127.0.0.1:8080\n\
+album=([!-~]+)&artist=([!-~]+)");
 std::string help = "GET /HTTP/127.0.0.1:8080/help";
 std::regex login("\
 POST /login HTTP/1.1\n\
@@ -46,7 +53,6 @@ public:
 	Server(std::string server_ip, uint16_t port_value);
 	~Server();
 	std::string get_response(std::string request, std::string userip);
-	void client_handler(SOCKET client, sockaddr_in clientInfo);
 	void waitingAcceptLoop();
 	void response(SOCKET client, sockaddr_in clientInfo);
 	std::string reg_user(std::string name, std::string password, std::string userip);
@@ -57,6 +63,7 @@ std::string album,
 std::string artist, std::string clientip);
 	std::string gethelp();
 	std::vector<std::string> get_id(std::string name);
+	std::string listen_album(std::string album, std::string artist, std::string clientip);
 	void update_song_info(std::string song_id, std::string client);
 	void stop();
 };
